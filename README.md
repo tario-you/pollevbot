@@ -1,88 +1,94 @@
 # pollevbot
 
-**pollevbot** is a bot that automatically responds to polls on [pollev.com](https://pollev.com/). 
-It continually checks if a specified host has opened any polls. Once a poll has been opened, 
-it submits a random response. 
+**pollevbot** is a bot that automatically checks a PollEverywhere host page and
+submits a random response when a new multiple-choice poll opens.
 
-Requires Python 3.7 or later.
-## Dependencies
+The current workflow targets Python 3.8+ and assumes you will authenticate with
+an existing browser session (needed for accounts protected by MFA).
 
-[Requests](https://pypi.org/project/requests/), 
-[BeautifulSoup](https://pypi.org/project/beautifulsoup4/). 
+---
 
-[APScheduler](https://pypi.org/project/APScheduler/) to deploy to Heroku.
+## Quick start
 
-## Usage
+Clone the fork that includes the cookie workflow and create an isolated
+environment:
 
-Install `pollevbot`:
-```
-pip install pollevbot
-```
-
-Set your username, password, and desired poll host:
-```python
-user = 'My Username'
-password = 'My Password'
-host = 'PollEverywhere URL Extension e.g. "uwpsych"'
+```bash
+git clone https://github.com/tario-you/pollevbot.git
+cd pollevbot
+conda create -y -n pollevbot-env python=3.8
+conda activate pollevbot-env
+pip install -r requirements.txt
 ```
 
-And run the script.
+---
+
+## Running the bot
+
+Run the helper and follow the prompts:
+
+```
+python -m pollevbot.main
+```
+
+The assistant will:
+1. Ask for the poll host (everything after `https://pollev.com/`).
+2. Prompt you to choose between cookie-based login (MFA compatible) or direct
+   username/password login (legacy accounts).
+
+When you select cookie login, the helper stores the cookies needed for
+authenticated requests in `session_cookies.json` and then polls the host every
+~5 seconds until you stop the process. Leave your computer powered on and awake
+while it runs; closing the laptop or killing the process ends the loop.
+
+### Cookie flow (recommended for MFA accounts)
+
+1. Log into <https://pollev.com/> in your browser and finish any MFA step.
+2. Open developer tools (Application/Storage in Chrome/Edge, Storage in
+   Firefox), expand **Cookies**, and select the `https://pollev.com` entry.
+3. Copy the values for any of these: `pe_auth_token`, `pollev_visitor`, and
+   `pollev_visit`, then paste a single line in the CLI like:
+   ```
+   pe_auth_token=<value>; pollev_visitor=<value>; pollev_visit=<value>
+   ```
+4. The helper saves the mapping to `session_cookies.json` and reuses it on
+   subsequent runs until PollEverywhere expires the session.
+
+When cookies are supplied, the bot skips the username/password login entirely.
+
+### 2. Optional: direct login (no MFA accounts)
+
+If you have a legacy PollEverywhere account without MFA, you can choose the
+credential option in the helper or instantiate the bot manually:
+
 ```python
 from pollevbot import PollBot
 
-user = 'My Username'
-password = 'My Password'
-host = 'PollEverywhere URL Extension e.g. "uwpsych"'
+user = "my_username"
+password = "my_password"
+host = "teacher123"  # everything after https://pollev.com/
 
-# If you're using a non-UW PollEv account,
-# add the argument "login_type='pollev'"
-with PollBot(user, password, host) as bot:
+with PollBot(user, password, host, login_type="pollev") as bot:
     bot.run()
 ```
-Alternatively, you can clone this repo, set your login credentials in 
-[main.py](pollevbot/main.py) and run it from there.
 
-## Heroku
+Use `login_type="uw"` only if you can authenticate through the UW SSO flow
+without MFA.
 
-**pollevbot** can be scheduled to run at specific dates/times (UTC timezone) using [Heroku](http://heroku.com/):
+---
 
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/danielqiang/pollevbot)
+## Scheduling / deployment
 
-Required configuration variables:
+This repo still ships Heroku helper scripts (`clock.py`, `herokuapp.py`) that
+previously relied on username/password logins. Because PollEverywhere now
+requires MFA for most accounts, they will only work if you supply fresh cookies
+through environment variables or disable MFA on the account. Evaluate whether a
+different hosting option (e.g., a personal server with a cron job) is easier in
+2025; Heroku Scheduler cannot interactively satisfy MFA challenges.
 
-* `DAY_OF_WEEK`: [cron](https://apscheduler.readthedocs.io/en/stable/modules/triggers/cron.html) string
-specifying weekdays to run pollevbot (e.g. `mon,wed` is Monday and Wednesday).
-* `HOUR`: [cron](https://apscheduler.readthedocs.io/en/stable/modules/triggers/cron.html) string
-(UTC time) specifying which hours to run pollevbot.
-* `LIFETIME`: Time to run pollevbot before terminating (in seconds). Set to `inf` to run forever.
-* `LOGIN_TYPE`: Login protocol to use (either `uw` or `pollev`).
-* `MINUTE`: [cron](https://apscheduler.readthedocs.io/en/stable/modules/triggers/cron.html) string
-specifying what minutes to run pollevbot.
-* `PASSWORD`: PollEv account password.
-* `POLLHOST`: PollEv host name.
-* `USERNAME`: PollEv account username.
-
-**Example**
-
-Suppose you want to answer polls made by poll host `teacher123` every Monday and Wednesday 
-from 11:30 AM to 12:30 PM PST (6:30 PM to 7:30 PM UTC) in your timezone on your UW account. To do this, set the config 
-variables as follows:
-
-* `DAY_OF_WEEK`: `mon,wed`
-* `HOUR`: `18`
-* `LIFETIME`: `3600`
-* `LOGIN_TYPE`: `uw`
-* `MINUTE`: `30`
-* `PASSWORD`: `yourpassword`
-* `POLLHOST`: `teacher123`
-* `USERNAME`: `yourusername`
-
-Then click `Deploy App` and wait for the app to finish building. 
-**pollevbot** is now deployed to Heroku! 
+---
 
 ## Disclaimer
 
-I do not promote or condone the usage of this script for any kind of academic misconduct 
-or dishonesty. I wrote this script for the sole purpose of educating myself on cybersecurity 
-and web protocol automation, and cannot be held liable for any indirect, incidental, consequential, 
-special, or exemplary damages arising out of or in connection with the usage of this script.
+This project is for educational purposes only. Use it responsibly and in
+accordance with any applicable academic integrity or site policies.

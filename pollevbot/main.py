@@ -1,5 +1,6 @@
 import json
 import textwrap
+from getpass import getpass
 from pathlib import Path
 
 from pollevbot import PollBot
@@ -77,15 +78,38 @@ def load_cookies(path: Path) -> dict:
     return prompt_for_cookies(path)
 
 
+def choose_login(host: str):
+    use_cookies = input("Use cookie-based login? [Y/n]: ").strip().lower()
+    if use_cookies in {"", "y", "yes"}:
+        cookies = load_cookies(COOKIE_PATH)
+        print("Using provided cookies to continue.\n")
+        return {
+            "user": "cookie-user",
+            "password": "",
+            "host": host,
+            "login_type": "pollev",
+            "session_cookies": cookies
+        }
+
+    user = prompt("PollEv username: ")
+    password = getpass("PollEv password: ")
+    login_type = input("Login type [pollev/uw] (default pollev): ").strip().lower() or "pollev"
+    print("Starting bot with credential login.\n")
+    return {
+        "user": user,
+        "password": password,
+        "host": host,
+        "login_type": login_type,
+        "session_cookies": None
+    }
+
+
 def main():
-    print("=== PollEv Cookie Assistant ===")
+    print("=== PollEv Assistant ===")
     host = prompt("Poll host (e.g. teacher123): ")
+    config = choose_login(host)
 
-    cookies = load_cookies(COOKIE_PATH)
-    print("Using provided cookies to continue.\n")
-
-    with PollBot(user="cookie-user", password="", host=host, login_type='pollev',
-                 session_cookies=cookies) as bot:
+    with PollBot(**config) as bot:
         bot.run()
 
 
