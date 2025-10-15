@@ -1,7 +1,7 @@
 import requests
 import logging
 import time
-from typing import Optional
+from typing import Optional, Dict
 from .endpoints import endpoints
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,8 @@ class PollBot:
     def __init__(self, user: str, password: str, host: str,
                  login_type: str = 'uw', min_option: int = 0,
                  max_option: int = None, closed_wait: float = 5,
-                 open_wait: float = 5, lifetime: float = float('inf')):
+                 open_wait: float = 5, lifetime: float = float('inf'),
+                 session_cookies: Optional[Dict[str, str]] = None):
         """
         Constructor. Creates a PollBot that answers polls on pollev.com.
 
@@ -45,6 +46,8 @@ class PollBot:
                         before answering.
         :param lifetime: Lifetime of this PollBot (in seconds).
                         If float('inf'), runs forever.
+        :param session_cookies: Optional mapping of cookie name to value used to
+                        authenticate without performing a login.
         :raises ValueError: if login_type is not 'uw' or 'pollev'.
         """
         if login_type not in {'uw', 'pollev'}:
@@ -69,6 +72,7 @@ class PollBot:
 
         self.lifetime = lifetime
         self.start_time = time.time()
+        self.session_cookies = session_cookies or {}
 
         self.session = requests.Session()
         self.session.headers = {
@@ -135,7 +139,12 @@ class PollBot:
 
         r = self.session.post(endpoints['uw_callback'],
                               data={'SAMLResponse': saml_response['value']})
-        auth_token = re.findall('pe_auth_token=(.*)', r.url)[0]
+        auth_tokens = re.findall('pe_auth_token=(.*)', r.url)
+        if not auth_tokens:
+            logger.error("MyUW login returned without an auth token. "
+                         "Check your credentials or login_type.")
+            return False
+        auth_token = auth_tokens[0]
         self.session.post(endpoints['uw_auth_token'],
                           headers={'x-csrf-token': self._get_csrf_token()},
                           data={'token': auth_token})
@@ -233,7 +242,11 @@ class PollBot:
     def run(self):
         """Runs the script."""
         try:
-            self.login()
+            if self.session_cookies:
+                logger.info("Using provided session cookies for authentication.")
+                self.session.cookies.update(self.session_cookies)
+            else:
+                self.login()
             token = self.get_firehose_token()
         except (LoginError, ValueError) as e:
             logger.error(e)

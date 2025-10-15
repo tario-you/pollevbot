@@ -112,3 +112,5 @@ setup.py
 /PollEvBot.egg-info
 /dev
 .pypirc
+
+session_cookies.json
