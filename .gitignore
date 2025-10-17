@@ -114,3 +114,5 @@ setup.py
 .pypirc
 
 session_cookies.json
+last_host.txt
+firehose_tokens.json

@@ -17,9 +17,11 @@ endpoints = {
     # Respond to a poll
     'firehose_auth': 'https://pollev.com/proxy/api/users/{host}/registration_info?_={timestamp}',
     'firehose_with_token': 'https://firehose-production.polleverywhere.com/users/{host}/activity/'
-                           'current.json?firehose_token={token}&last_message_sequence=0&_={timestamp}',
+                           'current.json?firehose_token={token}&last_message_sequence={sequence}&'
+                           '_={timestamp}',
     'firehose_no_token': 'https://firehose-production.polleverywhere.com/users/{host}/activity/'
-                         'current.json?last_message_sequence=0&_={timestamp}',
+                         'current.json?last_message_sequence={sequence}&'
+                         '_={timestamp}',
     'poll_data': 'https://pollev.com/proxy/api/participant/multiple_choice_polls/{uid}?include=collection',
     'respond_to_poll': 'https://pollev.com/proxy/api/participant/multiple_choice_polls/{uid}/results',
     'clear_responses': 'https://pollev.com/proxy/api/results/{id}',

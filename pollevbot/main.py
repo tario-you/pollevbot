@@ -2,15 +2,20 @@ import json
 import textwrap
 from getpass import getpass
 from pathlib import Path
+from typing import Optional
 
 from pollevbot import PollBot
 
 COOKIE_PATH = Path("session_cookies.json")
+HOST_PATH = Path("last_host.txt")
+TOKEN_PATH = Path("firehose_tokens.json")
 
 
-def prompt(text: str) -> str:
+def prompt(text: str, default: Optional[str] = None) -> str:
     while True:
         response = input(text).strip()
+        if not response and default is not None:
+            return default
         if response:
             return response
         print("Please enter a value.")
@@ -78,6 +83,53 @@ def load_cookies(path: Path) -> dict:
     return prompt_for_cookies(path)
 
 
+def load_token_cache(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with path.open() as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Warning: could not read firehose token cache ({exc}). We'll recreate it.")
+        return {}
+    if isinstance(data, dict):
+        filtered = {str(k): str(v) for k, v in data.items() if isinstance(v, str)}
+        if len(filtered) != len(data):
+            print("Warning: firehose token cache included non-string entries. "
+                  "Those entries were ignored.")
+        return filtered
+    print("Warning: firehose token cache format was unexpected. Ignoring it.")
+    return {}
+
+
+def save_token_cache(path: Path, cache: dict) -> None:
+    try:
+        path.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        print(f"Warning: could not save firehose token cache ({exc}).")
+
+
+def prompt_for_firehose_token(host: str, path: Path) -> Optional[str]:
+    cache = load_token_cache(path)
+    existing = cache.get(host)
+
+    if existing:
+        use_saved = input(f"Found saved firehose token for {host}. Use it? [Y/n]: ").strip().lower()
+        if use_saved in {"", "y", "yes"}:
+            print("Using cached firehose token.\n")
+            return existing
+
+    firehose_prompt = f"Firehose token for {host} (press Enter to skip): "
+    token = input(firehose_prompt).strip()
+    if token:
+        cache[host] = token
+        save_token_cache(path, cache)
+        print("Saved firehose token for this host.\n")
+        return token
+
+    return None
+
+
 def choose_login(host: str):
     use_cookies = input("Use cookie-based login? [Y/n]: ").strip().lower()
     if use_cookies in {"", "y", "yes"}:
@@ -104,10 +156,34 @@ def choose_login(host: str):
     }
 
 
+def load_last_host(path: Path) -> Optional[str]:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    return value or None
+
+
+def save_last_host(path: Path, host: str) -> None:
+    path.write_text(host.strip(), encoding="utf-8")
+
+
 def main():
     print("=== PollEv Assistant ===")
-    host = prompt("Poll host (e.g. teacher123): ")
+    last_host = load_last_host(HOST_PATH)
+    if last_host:
+        host_prompt = f"Poll host (e.g. teacher123) [{last_host}]: "
+    else:
+        host_prompt = "Poll host (e.g. teacher123): "
+    host = prompt(host_prompt, default=last_host)
     config = choose_login(host)
+    try:
+        save_last_host(HOST_PATH, host)
+    except OSError as exc:
+        print(f"Warning: could not remember host ({exc}).")
+
+    firehose_token = prompt_for_firehose_token(host, TOKEN_PATH)
+    config["firehose_token"] = firehose_token
 
     with PollBot(**config) as bot:
         bot.run()

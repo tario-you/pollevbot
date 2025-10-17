@@ -35,10 +35,13 @@ The assistant will:
 1. Ask for the poll host (everything after `https://pollev.com/`).
 2. Prompt you to choose between cookie-based login (MFA compatible) or direct
    username/password login (legacy accounts).
+3. Offer to reuse a cached firehose token for that host (stored in
+   `firehose_tokens.json`) or paste a fresh token if you have one handy.
 
 When you select cookie login, the helper stores the cookies needed for
-authenticated requests in `session_cookies.json` and then polls the host every
-~5 seconds until you stop the process. Leave your computer powered on and awake
+authenticated requests in `session_cookies.json` and then maintains a long-poll
+connection to the host (up to ~25 seconds per request) until you stop the
+process. Leave your computer powered on and awake
 while it runs; closing the laptop or killing the process ends the loop.
 
 ### Cookie flow (recommended for MFA accounts)
@@ -53,6 +56,10 @@ while it runs; closing the laptop or killing the process ends the loop.
    ```
 4. The helper saves the mapping to `session_cookies.json` and reuses it on
    subsequent runs until PollEverywhere expires the session.
+5. Paste the firehose token shown in the PollEverywhere network console
+   (or press Enter to let the bot request one automatically). Provided tokens
+   are cached per host in `firehose_tokens.json`, so you only need to capture
+   them once per presenter session.
 
 When cookies are supplied, the bot skips the username/password login entirely.
 

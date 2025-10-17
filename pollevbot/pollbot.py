@@ -28,7 +28,8 @@ class PollBot:
                  login_type: str = 'uw', min_option: int = 0,
                  max_option: int = None, closed_wait: float = 5,
                  open_wait: float = 5, lifetime: float = float('inf'),
-                 session_cookies: Optional[Dict[str, str]] = None):
+                 session_cookies: Optional[Dict[str, str]] = None,
+                 firehose_token: Optional[str] = None):
         """
         Constructor. Creates a PollBot that answers polls on pollev.com.
 
@@ -48,6 +49,7 @@ class PollBot:
                         If float('inf'), runs forever.
         :param session_cookies: Optional mapping of cookie name to value used to
                         authenticate without performing a login.
+        :param firehose_token: Optional AWS firehose token to poll for activity.
         :raises ValueError: if login_type is not 'uw' or 'pollev'.
         """
         if login_type not in {'uw', 'pollev'}:
@@ -73,14 +75,26 @@ class PollBot:
         self.lifetime = lifetime
         self.start_time = time.time()
         self.session_cookies = session_cookies or {}
+        self.firehose_token = firehose_token
+        self.last_message_sequence = 0
 
         self.session = requests.Session()
         self.session.headers = {
             'user-agent': "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                           "(KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36"
         }
-        # IDs of all polls we have answered already
-        self.answered_polls = set()
+
+    def _update_last_message_sequence(self, sequence) -> None:
+        """Track the latest firehose message sequence observed."""
+        if sequence is None:
+            return
+        try:
+            seq_int = int(sequence)
+        except (TypeError, ValueError):
+            logger.debug("firehose sequence value not an int; value=%s", sequence)
+            return
+        if seq_int > self.last_message_sequence:
+            self.last_message_sequence = seq_int
 
     def __enter__(self):
         return self
@@ -179,13 +193,16 @@ class PollBot:
         self.session.cookies['pollev_visit'] = str(uuid4())
         url = endpoints['firehose_auth'].format(
             host=self.host,
-            timestamp=self.timestamp
+            timestamp=self.timestamp()
         )
         r = self.session.get(url)
+        logger.debug("firehose auth status=%s body=%s", r.status_code, r.text[:512])
 
         if "presenter not found" in r.text.lower():
             raise ValueError(f"'{self.host}' is not a valid poll host.")
-        return r.json()['firehose_token']
+        token = r.json().get('firehose_token')
+        logger.debug("firehose auth token=%s", token)
+        return token
 
     def get_new_poll_id(self, firehose_token=None) -> Optional[str]:
         import json
@@ -194,32 +211,60 @@ class PollBot:
             url = endpoints['firehose_with_token'].format(
                 host=self.host,
                 token=firehose_token,
-                timestamp=self.timestamp
+                sequence=self.last_message_sequence,
+                timestamp=self.timestamp()
             )
         else:
             url = endpoints['firehose_no_token'].format(
                 host=self.host,
-                timestamp=self.timestamp
+                sequence=self.last_message_sequence,
+                timestamp=self.timestamp()
             )
+        response_json = {}
+        message = ''
         try:
-            r = self.session.get(url, timeout=0.3)
-            # Unique id for poll
-            poll_id = json.loads(r.json()['message'])['uid']
+            logger.debug("firehose request → %s", url)
+            r = self.session.get(url, timeout=25)
+            logger.debug("firehose status=%s cookies=%s", r.status_code, r.cookies.get_dict())
+            logger.debug("firehose body=%s", r.text[:512])
+            response_json = r.json()
+            self._update_last_message_sequence(response_json.get('last_message_sequence'))
+            message = response_json.get('message', '')
+            if not message:
+                logger.debug("firehose response missing message payload; raw json=%s", response_json)
+                return None
+            payload_json = json.loads(message)
+            if not isinstance(payload_json, dict):
+                logger.debug("firehose message payload not a dict; payload=%s raw json=%s",
+                             payload_json, response_json)
+                return None
+            poll_id = payload_json.get('uid')
+            if not poll_id:
+                logger.debug("firehose message missing UID payload; message=%s raw json=%s",
+                             message, response_json)
+                return None
+            self._update_last_message_sequence(payload_json.get('sequence'))
         # Firehose either doesn't respond or responds with no data if no poll is open.
-        except (requests.exceptions.ReadTimeout, KeyError):
+        except requests.exceptions.ReadTimeout:
+            logger.debug("firehose long-poll timed out (no new activity yet); will retry")
             return None
-        if poll_id in self.answered_polls:
+        except json.JSONDecodeError:
+            logger.debug("firehose message payload was not valid JSON; message=%s raw json=%s",
+                         message, response_json)
             return None
-        else:
-            self.answered_polls.add(poll_id)
-            return poll_id
+        logger.debug("firehose parsed poll_id=%s", poll_id)
+        return poll_id
 
     def answer_poll(self, poll_id) -> dict:
         import random
 
         url = endpoints['poll_data'].format(uid=poll_id)
         poll_data = self.session.get(url).json()
+        logger.debug("poll %s data keys=%s", poll_id, list(poll_data.keys()))
         options = poll_data['options'][self.min_option:self.max_option]
+        logger.debug("poll %s options slice [%s:%s] -> %s choices",
+                     poll_id, self.min_option, self.max_option,
+                     len(options))
         try:
             option_id = random.choice(options)['id']
         except IndexError:
@@ -229,11 +274,14 @@ class PollBot:
                          f'self.min_option was {self.min_option} and '
                          f'self.max_option: {self.max_option}')
             return {}
+        logger.debug("poll %s selected option_id=%s", poll_id, option_id)
         r = self.session.post(
             endpoints['respond_to_poll'].format(uid=poll_id),
             headers={'x-csrf-token': self._get_csrf_token()},
             data={'option_id': option_id, 'isPending': True, 'source': "pollev_page"}
         )
+        logger.debug("poll %s respond status=%s body=%s",
+                     poll_id, r.status_code, r.text[:512])
         return r.json()
 
     def alive(self):
@@ -245,23 +293,66 @@ class PollBot:
             if self.session_cookies:
                 logger.info("Using provided session cookies for authentication.")
                 self.session.cookies.update(self.session_cookies)
+                try:
+                    # Prime CSRF/token state to validate the supplied cookies early.
+                    _ = self._get_csrf_token()
+                except Exception as exc:
+                    logger.warning(f"CSRF preflight failed: {exc}")
             else:
                 self.login()
-            token = self.get_firehose_token()
+
+            referer = endpoints['home'].format(host=self.host)
+            self.session.headers['Referer'] = referer
+            try:
+                logger.debug("warming up session via %s", referer)
+                self.session.get(referer, timeout=5)
+            except Exception as exc:
+                logger.debug("host warm-up failed (non-fatal): %s", exc)
+
+            registration_url = f"https://pollev.com/proxy/api/users/{self.host}/participant_registration"
+            try:
+                logger.debug("attempting participant registration → %s", registration_url)
+                self.session.post(
+                    registration_url,
+                    headers={'x-csrf-token': self._get_csrf_token()},
+                    json={},
+                    timeout=5
+                )
+            except Exception as exc:
+                logger.debug("participant_registration failed or unavailable: %s", exc)
+
+            token = self.firehose_token
+            if token:
+                logger.info("Using firehose token supplied via configuration.")
+            else:
+                token = self.get_firehose_token()
+            if not token:
+                logger.error(
+                    "No firehose_token for '%s' after warm-up; verify the host is correct "
+                    "and that this session has joined the presenter context.",
+                    self.host
+                )
+                return
+            self.firehose_token = token
+            self.last_message_sequence = 0
         except (LoginError, ValueError) as e:
             logger.error(e)
             return
 
         while self.alive():
-            poll_id = self.get_new_poll_id(token)
+            poll_id = self.get_new_poll_id(self.firehose_token)
 
             if poll_id is None:
-                logger.info(f'`{self.host}` has not opened any new polls. '
-                            f'Waiting {self.closed_wait} seconds before checking again.')
-                time.sleep(self.closed_wait)
+                logger.info(f'`{self.host}` has no new activity yet. Polling again shortly.')
+                sleep_for = min(1.0, self.closed_wait)
+                if sleep_for > 0:
+                    logger.debug("sleeping for %s seconds before next firehose check", sleep_for)
+                    time.sleep(sleep_for)
             else:
                 logger.info(f"{self.host} has opened a new poll! "
                             f"Waiting {self.open_wait} seconds before responding.")
                 time.sleep(self.open_wait)
                 r = self.answer_poll(poll_id)
+                if not r:
+                    logger.warning("poll %s response payload empty; request likely failed", poll_id)
                 logger.info(f'Received response: {r}')
