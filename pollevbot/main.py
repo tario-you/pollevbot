@@ -3,8 +3,16 @@ import textwrap
 from getpass import getpass
 from pathlib import Path
 from typing import Optional
+import sys
 
-from pollevbot import PollBot
+try:
+    from pollevbot import PollBot
+except ModuleNotFoundError:
+    package_root = Path(__file__).resolve().parent.parent
+    package_str = str(package_root)
+    if package_str not in sys.path:
+        sys.path.insert(0, package_str)
+    from pollevbot import PollBot
 
 COOKIE_PATH = Path("session_cookies.json")
 HOST_PATH = Path("last_host.txt")
